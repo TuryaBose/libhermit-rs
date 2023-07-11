@@ -199,6 +199,52 @@ impl PosixFileSystem for Fuse {
 
 		Ok(())
 	}
+
+	fn fsync(&self, path: &str, datasync: bool, perms: FilePerms) -> Result<(), FileError> {
+		//file structure
+        let mut file = FuseFile {
+			fuse_nid: None,
+			fuse_fh: None,
+			offset: 0,
+		};
+
+		//open file
+		if !perms.creat {
+			// 2.FUSE_LOOKUP(FUSE_ROOT_ID, “foo”) -> nodeid
+			file.fuse_nid = self.lookup(path);
+
+			if file.fuse_nid.is_none() {
+				warn!("Fuse lookup seems to have failed!");
+				return Err(FileError::ENOENT);
+			}
+
+			// 3.FUSE_OPEN(nodeid, O_RDONLY) -> fh
+			let (cmd, mut rsp) = create_open(file.fuse_nid.unwrap(), perms.raw);
+			get_filesystem_driver()
+				.ok_or(FileError::ENOSYS)?
+				.lock()
+				.send_command(cmd.as_ref(), rsp.as_mut());
+			file.fuse_fh = Some(unsafe { rsp.rsp.assume_init().fh });
+		} else {
+			// Create file (opens implicitly, returns results from both lookup and open calls)
+			let (cmd, mut rsp) = create_create(path, perms.raw, perms.mode);
+			get_filesystem_driver()
+				.ok_or(FileError::ENOSYS)?
+				.lock()
+				.send_command(cmd.as_ref(), rsp.as_mut());
+
+			let inner = unsafe { rsp.rsp.assume_init() };
+			file.fuse_nid = Some(inner.entry.nodeid);
+			file.fuse_fh = Some(inner.open.fh);
+		}
+
+		Ok(Box::new(file))
+
+		// Flush the file buffers to ensure all data is written to disk
+
+		 // Sync the file to disk
+        
+	}
 }
 
 impl Fuse {
